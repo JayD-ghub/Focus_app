@@ -250,6 +250,12 @@
                 margin-top:12px; cursor:pointer; text-decoration:underline; text-underline-offset:2px;}
   .greet{font-size:12.5px; color:var(--ink2); margin:-8px 2px 16px; font-family:var(--serif); font-style:italic;}
   .greet b{color:var(--amber); font-weight:400;}
+  .greetrow{display:flex; align-items:flex-start; justify-content:space-between; gap:10px;}
+  .greetrow .greet{margin:-6px 0 16px; flex:1;}
+  .soundToggle{background:var(--panel2); border:1px solid var(--line); border-radius:8px; width:30px; height:30px;
+              flex:0 0 auto; display:flex; align-items:center; justify-content:center; cursor:pointer; margin-top:-8px;}
+  .soundToggle svg{width:16px; height:16px;}
+  .soundToggle:active{border-color:var(--line2);}
 
   button:focus-visible, .preset:focus-visible, .cell-d:focus-visible{outline:2px solid var(--cyan); outline-offset:2px;}
   @media (prefers-reduced-motion: reduce){
@@ -294,7 +300,13 @@
       </div>
       <div class="date"><span class="k" id="dateK">today</span><span id="dateLabel"></span></div>
     </div>
-    <div class="greet" id="greetLine">&nbsp;</div>
+    <div class="greetrow">
+      <div class="greet" id="greetLine">&nbsp;</div>
+      <button class="soundToggle" id="soundToggle" aria-label="toggle alarm sound" title="toggle alarm sound">
+        <svg viewBox="0 0 24 24" id="soundIconOn"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="var(--cyan)" stroke="none"/><path d="M16.5 8.5a5 5 0 0 1 0 7" fill="none" stroke="var(--cyan)" stroke-width="1.6" stroke-linecap="round"/><path d="M19 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="var(--cyan)" stroke-width="1.6" stroke-linecap="round" opacity=".6"/></svg>
+        <svg viewBox="0 0 24 24" id="soundIconOff" style="display:none;"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="var(--ink3)" stroke="none"/><path d="M15.5 9.5l5 5m0-5l-5 5" stroke="var(--ink3)" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
+    </div>
 
     <div class="card">
       <div class="ringwrap">
@@ -578,6 +590,7 @@
 
   var days = loadDays();
   var settings = loadSettings();
+  if(typeof settings.sound !== 'boolean') settings.sound = true;
 
   function dayObj(k){
     if(!days[k]) days[k] = { focusSeconds:0, sessions:[], journal:'', shutdown:{finished:'',tomorrow:'',blocker:''} };
@@ -704,6 +717,46 @@
   function releaseWake(){ try{ if(wakeLock){ wakeLock.release(); wakeLock=null; } }catch(e){} }
   function buzz(){ try{ if(navigator.vibrate) navigator.vibrate([180,80,180]); }catch(e){} }
 
+  // ---------- alarm chime (synthesized, no audio file needed) ----------
+  var actx = null;
+  function primeAudio(){
+    if(!settings.sound) return;
+    try{
+      if(!actx) actx = new (window.AudioContext||window.webkitAudioContext)();
+      if(actx.state==='suspended') actx.resume();
+    }catch(e){}
+  }
+  function tone(freq, startAt, dur, peak){
+    var osc=actx.createOscillator(), gain=actx.createGain();
+    osc.type='sine'; osc.frequency.value=freq;
+    osc.connect(gain); gain.connect(actx.destination);
+    gain.gain.setValueAtTime(0, startAt);
+    gain.gain.linearRampToValueAtTime(peak, startAt+0.025);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startAt+dur);
+    osc.start(startAt); osc.stop(startAt+dur+0.05);
+  }
+  function chime(freqs, dur, peak){
+    if(!settings.sound) return;
+    if(!actx || actx.state==='suspended') primeAudio();
+    if(!actx) return;
+    var t0=actx.currentTime;
+    freqs.forEach(function(f,i){ tone(f, t0+i*0.15, dur, peak||0.14); });
+  }
+  function chimeFocusDone(){ chime([659.25, 987.77], 0.55, 0.15); }   // E5 -> B5, bright — break earned
+  function chimeBreakOver(){ chime([523.25, 659.25], 0.6, 0.13); }    // C5 -> E5, gentler — back to it
+
+  function updateSoundIcon(){
+    document.getElementById('soundIconOn').style.display = settings.sound ? '' : 'none';
+    document.getElementById('soundIconOff').style.display = settings.sound ? 'none' : '';
+  }
+  document.getElementById('soundToggle').addEventListener('click', function(){
+    settings.sound = !settings.sound; saveSettings(settings); updateSoundIcon();
+    if(settings.sound){ primeAudio(); chime([880], 0.35, 0.13); toast('alarm sound on'); }
+    else toast('alarm sound off');
+  });
+  // prime audio on the very first tap anywhere, so a resumed/reloaded timer can still chime
+  document.addEventListener('pointerdown', primeAudio, {once:true, passive:true});
+
   function tick(){
     if(!running || !endAt) return;
     remaining = Math.round((endAt - Date.now())/1000);
@@ -718,9 +771,11 @@
     if(mode==='focus'){
       logSession(totalSec);
       mode='break'; totalSec=breakMin*60; remaining=totalSec;
+      chimeFocusDone();
       toast('focus done \u2014 break started');
     } else {
       mode='focus'; totalSec=focusMin*60; remaining=totalSec;
+      chimeBreakOver();
       toast('break over \u2014 ready for next');
     }
     setBtns(false);
@@ -738,7 +793,7 @@
     running = true;
     endAt = Date.now() + remaining*1000;
     clearInterval(ticker); ticker = setInterval(tick, 500);
-    requestWake();
+    requestWake(); primeAudio();
     setBtns(true); saveTimer();
   }
   function pause(){
@@ -761,6 +816,7 @@
   document.addEventListener('visibilitychange', function(){
     if(!document.hidden && running) tick();
     if(!document.hidden && running && !wakeLock) requestWake();
+    if(!document.hidden && actx && actx.state==='suspended') actx.resume();
   });
   window.addEventListener('pageshow', function(){ if(running) tick(); });
 
@@ -1130,6 +1186,7 @@
   render();
   renderGreeting();
   maybeOnboard();
+  updateSoundIcon();
 
   if('serviceWorker' in navigator){
     window.addEventListener('load', function(){

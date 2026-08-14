@@ -28,6 +28,9 @@ server, no tracking. Everything stays on your device.
 **Personal touches**
 - Greets you by name (set on first launch, editable anytime in Progress →
   *the researcher*)
+- A soft two-tone chime plays when a focus block or break ends (synthesized
+  in-browser, no audio file needed) — tap the speaker icon next to the
+  greeting to mute it
 - Installs to your home screen with an atom icon and opens full-screen, no
   browser bar
 - Works offline once installed (via a service worker)
